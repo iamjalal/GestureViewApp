@@ -29,20 +29,28 @@ public class TransformView extends ImageView {
     private static final int POINTER_SPAN_THRESHOLD = 300;
 
     private int mActivePointerId = INVALID_POINTER_ID;
+    private int mActivePointerId_ = INVALID_POINTER_ID;
+
+    private float mLastTouchX, mLastTouchY;
+
+    private float mInitTouchX, mInitTouchY;
+    private float mInitTouchX_, mInitTouchY_;
 
     private Drawable mDrawable;
-
-    private ScaleGestureDetector mScaleDetector;
     private Camera mCamera;
     private Matrix mMatrix;
 
-    private float mLastTouchX, mLastTouchY;
+    private ScaleGestureDetector mScaleDetector;
+
     private float mPosX, mPosY;
     private float mRotationDegrees;
+    private float mInitDegrees;
+    private float mLastDegrees;
+
     private float mXAxisRotation;
     private float mYAxisRotation;
-
     private float mScaleFactor = 1.f;
+    private boolean isScaling;
 
     public TransformView(Context context) {
         this(context, null, 0);
@@ -82,7 +90,7 @@ public class TransformView extends ImageView {
         canvas.translate(mPosX, mPosY);
         canvas.concat(mMatrix);
         canvas.scale(mScaleFactor, mScaleFactor, centerX, centerY);
-        //canvas.rotate(mRotationDegrees, centerX, centerY);
+        canvas.rotate(mRotationDegrees, centerX, centerY);
 
         mDrawable.draw(canvas);
 
@@ -98,18 +106,23 @@ public class TransformView extends ImageView {
 
             case MotionEvent.ACTION_DOWN: {
 
+                final float x = ev.getX();
+                final float y = ev.getY();
+
+                mInitTouchX = x;
+                mInitTouchY = y;
+
+                mLastTouchX = mInitTouchX;
+                mLastTouchY = mInitTouchY;
+
                 mActivePointerId = ev.getPointerId(0);
-
-                final float x = ev.getX(mActivePointerId);
-                final float y = ev.getY(mActivePointerId);
-
-                mLastTouchX = x;
-                mLastTouchY = y;
 
                 break;
             }
 
             case MotionEvent.ACTION_MOVE: {
+
+                //Info from first pointer
                 final int pointerIndex = ev.findPointerIndex(mActivePointerId);
                 final float x = ev.getX(pointerIndex);
                 final float y = ev.getY(pointerIndex);
@@ -117,26 +130,32 @@ public class TransformView extends ImageView {
                 final float dx = x - mLastTouchX;
                 final float dy = y - mLastTouchY;
 
-                if (!mScaleDetector.isInProgress()){
-
-                    if(ev.getPointerCount() == 1) {
-                        translate(dx, dy);
-                    }
-                    else if(ev.getPointerCount() == 2 &&
-                            mScaleDetector.getCurrentSpanY() <= POINTER_SPAN_THRESHOLD) {
-                        if(Math.abs(dy) > Math.abs(dx)) {
-                            rotateXAxis(dy);
-                        }
-                        else {
-                            rotateYAxis(dx);
-                        }
-                    }
+                if(ev.getPointerCount() == 1) {
+                    translate(dx, dy);
                 }
-
-                rotate(ev);
 
                 mLastTouchX = x;
                 mLastTouchY = y;
+
+                //Info from second pointer
+                final int pointerIndex_ = ev.findPointerIndex(mActivePointerId_);
+                if(pointerIndex_ == INVALID_POINTER_ID) {
+                    break;
+                }
+
+                final float y_ = ev.getY(pointerIndex_);
+
+                float pointerSpanY = Math.abs(y - y_);
+                if(!isScaling && pointerSpanY < POINTER_SPAN_THRESHOLD) {
+                    if (Math.abs(dy) > Math.abs(dx)) {
+                        rotateXAxis(dy);
+                    } else {
+                        rotateYAxis(dx);
+                    }
+                }
+                else {
+                    rotate(ev);
+                }
 
                 break;
             }
@@ -155,12 +174,34 @@ public class TransformView extends ImageView {
                 final int pointerIndex = (ev.getAction() & MotionEvent.ACTION_POINTER_INDEX_MASK)
                         >> MotionEvent.ACTION_POINTER_INDEX_SHIFT;
                 final int pointerId = ev.getPointerId(pointerIndex);
-                if (pointerId == mActivePointerId) {
+                if(pointerId == mActivePointerId) {
                     final int newPointerIndex = pointerIndex == 0 ? 1 : 0;
                     mLastTouchX = ev.getX(newPointerIndex);
                     mLastTouchY = ev.getY(newPointerIndex);
                     mActivePointerId = ev.getPointerId(newPointerIndex);
                 }
+                else if(pointerId == mActivePointerId_) {
+                    mActivePointerId_ = INVALID_POINTER_ID;
+                }
+
+                mLastDegrees = mRotationDegrees;
+                isScaling = false;
+
+                break;
+            }
+
+            case MotionEvent.ACTION_POINTER_DOWN: {
+
+                final float x = ev.getX(1);
+                final float y = ev.getY(1);
+
+                mInitTouchX_ = x;
+                mInitTouchY_ = y;
+
+                mActivePointerId_ = ev.getPointerId(1);
+
+                mInitDegrees = getDegrees(mInitTouchX, mInitTouchY, mInitTouchX_, mInitTouchY_);
+
                 break;
             }
         }
@@ -172,24 +213,26 @@ public class TransformView extends ImageView {
         @Override
         public boolean onScale(ScaleGestureDetector detector) {
 
+            isScaling = false;
             if(detector.getCurrentSpanY() > POINTER_SPAN_THRESHOLD) {
+                isScaling = true;
                 mScaleFactor *= detector.getScaleFactor();
                 mScaleFactor = Math.max(MIN_SCALE_FACTOR, Math.min(mScaleFactor, MAX_SCALE_FACTOR));
                 invalidate();
-                return true;
             }
-            else {
-                return false;
-            }
+
+            return isScaling;
         }
     }
 
     private void rotate(MotionEvent ev) {
-        if(ev.getPointerCount() > 1) {
-            double delta_x = (ev.getX(0) - ev.getX(1));
-            double delta_y = (ev.getY(0) - ev.getY(1));
-            double radians = Math.atan2(delta_y, delta_x);
-            mRotationDegrees = (float) Math.toDegrees(radians);
+
+        final int pointerIndex = ev.findPointerIndex(mActivePointerId);
+        final int pointerIndex_ = ev.findPointerIndex(mActivePointerId_);
+        if(pointerIndex_ != INVALID_POINTER_ID) {
+            float currentDegrees = getDegrees(ev.getX(pointerIndex), ev.getY(pointerIndex),
+                    ev.getX(pointerIndex_), ev.getY(pointerIndex_));
+            mRotationDegrees = currentDegrees - mInitDegrees + mLastDegrees;
             invalidate();
         }
     }
@@ -212,5 +255,13 @@ public class TransformView extends ImageView {
         mYAxisRotation = Math.max(MIN_X_AXIS_ROTATION,
                 Math.min(mYAxisRotation, MAX_X_AXIS_ROTATION));
         invalidate();
+    }
+
+    private float getDegrees(float x1, float y1, float x2, float y2) {
+        double deltaInit_x = x1 - x2;
+        double deltaInit_y = y1 - y2;
+        double radiansInit = Math.atan2(deltaInit_y, deltaInit_x);
+
+        return (float) Math.toDegrees(radiansInit);
     }
 }
